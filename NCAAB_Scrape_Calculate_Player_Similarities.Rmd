@@ -1,0 +1,451 @@
+---
+title: "NCAA Basketball Scrape & Calculate Player Similarities"
+about: "used for tableau public report"
+author: "Ryan Salsbury"
+date: "11/19/2018"
+output: html_document
+---
+
+Scrape 2018-19 NCAA basketball player stats from basketball.realgm.com and calculate 10 most similar players historically(>= 2002) using the euclidean distance function. Similarities are calculate based on the per minute stats compared to the NCAA average for the season. 
+
+Load Packages
+```{r}
+
+require(flexclust)
+library(rvest)
+library(magrittr)
+library(sqldf)
+library(dplyr)
+library(tidyr) 
+library(reshape2)
+library(readr)
+
+```
+
+Scrape stats and caculate similarities
+```{r}
+#Get 2019 stats
+#Number of pages to loop through
+pages <- seq(0,25,1)
+
+tables <- list()
+index <- 1
+for(i in pages){
+  try({
+  url <- paste0("https://basketball.realgm.com/ncaa/stats/2019/Totals/Qualified/All/Season/All/points/desc/", i, "")
+  
+  table <- url %>% 
+    read_html() %>% 
+    html_table(fill = TRUE)
+
+  tables[index] <- table
+
+  index <- index + 1
+ 
+
+  })
+}
+
+df2018 <- do.call("rbind", tables)
+
+
+#Get 2019 Height/Weight/Age
+#number of pages to loop through
+pages <- LETTERS[seq(0,26,1)]
+
+tables <- list()
+index <- 1
+for(i in pages){
+  try({
+  url <- paste0("https://basketball.realgm.com/ncaa/players/2019/", i, "")
+  
+  table <- url %>% 
+    read_html() %>% 
+    html_table(fill = TRUE)
+
+  tables[index] <- table
+
+  index <- index + 1
+ 
+
+  })
+}
+
+df2018hw <- do.call("rbind", tables)
+
+#Remove Duplicate Players from stats table
+NCAA2018 <- df2018[!(duplicated(df2018$Player) | duplicated(df2018$Player, fromLast = TRUE)), ]
+
+#Remove Duplicate Players from height/weight/age table
+hw <- df2018hw[!(duplicated(df2018hw$Player) | duplicated(df2018hw$Player, fromLast = TRUE)), ]
+
+#Join 2 tables together
+NCAA2018 <- sqldf("select distinct *, '2019' AS Season from NCAA2018 d1 left join hw d2 on d1.Player = d2.Player")
+
+
+#Remove Duplicate Player Column Name
+NCAA2018 <- NCAA2018[,-2]
+
+#Reorder Columns
+NCAA2018 <- NCAA2018[,c(23,24,25,26,27,28,29,30,31,32,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22)]
+
+#Remove unwanted columns
+NCAA2018 <- NCAA2018[,-c(15,18,21)]
+
+
+##Get 2019 advanced stats
+#Number of pages to loop through
+pages <- seq(0,22,1)
+
+tables <- list()
+index <- 1
+for(i in pages){
+  try({
+  url <- paste0("https://basketball.realgm.com/ncaa/stats/2019/Advanced_Stats/Qualified/All/Season/All/per/desc/", i, "")
+  
+  table <- url %>% 
+    read_html() %>% 
+    html_table(fill = TRUE)
+
+  tables[index] <- table
+
+  index <- index + 1
+ 
+
+  })
+}
+
+df2018 <- do.call("rbind", tables)
+
+#Remove Duplicate Players
+NCAA2018adv <- df2018[!(duplicated(df2018$Player) | duplicated(df2018$Player, fromLast = TRUE)), ]
+NCAA2018adv <- sqldf("select distinct *, '2019' AS Season from NCAA2018adv")
+
+#Remove Duplicate Column
+NCAA2018adv <- NCAA2018adv[,-1]
+
+#Join to NCAA2018
+NCAA_adv <- sqldf("select distinct * from NCAA2018 left join NCAA2018adv ON NCAA2018.Player = NCAA2018adv.Player")
+
+#Remove Unwanted columns
+NCAA_adv <- NCAA_adv[,-c(28,29,48)]
+
+#Overwrite NCAA2018 with new data
+NCAA2018 <- NCAA_adv
+
+#Get Historical Stats
+NCAA <- read.csv("NCAA_PlayerStats2002_2019_adv.csv")
+
+#Remove players from 2019 season
+NCAA_Hist <- sqldf("select * from NCAA where Season <> 2019")
+NCAA_2019 <- NCAA2018
+
+#remove unwanted columns
+NCAA_Hist <- NCAA_Hist[, c(1,2,3,4,5,6,10:19,21,22,24:27,29,30:48)]
+NCAA_2019 <- NCAA_2019[, c(1,2,3,4,5,6,10:19,21,22,24:27:45)]
+
+#Rename Height column
+NCAA_2019$Height <- NCAA_2019$HT
+#Convert Height to Inches
+NCAA_2019$HT <- sapply(strsplit(as.character(NCAA_2019[,3]),"-"),
+        function(x){12*as.numeric(x[1]) + as.numeric(x[2])})
+
+#Convert weight to numeric
+NCAA_2019$WT<-as.numeric(NCAA_2019$WT) 
+
+#Remove NA
+NCAA_2019 <- na.omit(NCAA_2019)
+NCAA_Hist <- na.omit(NCAA_Hist)
+
+#Make 0's Null for FTA and 3PA for historical data
+NCAA_Hist$FTA <- ifelse(NCAA_Hist$FTA ==0,NA, NCAA_Hist$FTA)
+NCAA_Hist$X3PA <- ifelse(NCAA_Hist$X3PA ==0,NA, NCAA_Hist$X3PA)
+
+#Calculate per minute numbers for historical data
+NCAA_Hist <- transform(NCAA_Hist, FGM = FGM /MIN)
+NCAA_Hist <- transform(NCAA_Hist, FGA = FGA /MIN)
+NCAA_Hist <- transform(NCAA_Hist, X3PM = X3PM /MIN)
+NCAA_Hist <- transform(NCAA_Hist, X3PA = X3PA /MIN)
+NCAA_Hist <- transform(NCAA_Hist, X3Pp = X3PM /X3PA)
+NCAA_Hist <- transform(NCAA_Hist, FTM = FTM /MIN)
+NCAA_Hist <- transform(NCAA_Hist, FTA = FTA /MIN)
+NCAA_Hist <- transform(NCAA_Hist, FTp = FTM /FTA)
+NCAA_Hist <- transform(NCAA_Hist, TOV = TOV /MIN)
+NCAA_Hist <- transform(NCAA_Hist, ORB = ORB /MIN)
+NCAA_Hist <- transform(NCAA_Hist, DRB = DRB /MIN)
+NCAA_Hist <- transform(NCAA_Hist, AST = AST /MIN)
+NCAA_Hist <- transform(NCAA_Hist, STL = STL /MIN)
+NCAA_Hist <- transform(NCAA_Hist, BLK = BLK /MIN)
+NCAA_Hist <- transform(NCAA_Hist, PTS = PTS /MIN)
+NCAA_Hist <- transform(NCAA_Hist, MIN = MIN/GP)
+
+#Calculate averages for each season in historical data
+NCAA_Hist$FGMa <- ave(NCAA_Hist$FGM, NCAA_Hist$Season)
+NCAA_Hist$FGAa <- ave(NCAA_Hist$FGA, NCAA_Hist$Season)
+NCAA_Hist$X3PMa <- ave(NCAA_Hist$X3PM, NCAA_Hist$Season)
+NCAA_Hist$X3PAa <- ave(NCAA_Hist$X3PA, NCAA_Hist$Season, FUN=function(x) mean(x, na.rm=T))
+NCAA_Hist$X3Ppa <- ave(NCAA_Hist$X3Pp, NCAA_Hist$Season, FUN=function(x) mean(x, na.rm=T))
+NCAA_Hist$FTMa <- ave(NCAA_Hist$FTM, NCAA_Hist$Season)
+NCAA_Hist$FTAa <- ave(NCAA_Hist$FTA, NCAA_Hist$Season)
+NCAA_Hist$FTpa <- ave(NCAA_Hist$FTp, NCAA_Hist$Season)
+NCAA_Hist$TOVa <- ave(NCAA_Hist$TOV, NCAA_Hist$Season)
+NCAA_Hist$ORBa <- ave(NCAA_Hist$ORB, NCAA_Hist$Season)
+NCAA_Hist$DRBa <- ave(NCAA_Hist$DRB, NCAA_Hist$Season)
+NCAA_Hist$ASTa <- ave(NCAA_Hist$AST, NCAA_Hist$Season)
+NCAA_Hist$STLa <- ave(NCAA_Hist$STL, NCAA_Hist$Season)
+NCAA_Hist$BLKa <- ave(NCAA_Hist$BLK, NCAA_Hist$Season)
+NCAA_Hist$PTSa <- ave(NCAA_Hist$PTS, NCAA_Hist$Season)
+NCAA_Hist$TSa <- ave(NCAA_Hist$TS, NCAA_Hist$Season)
+NCAA_Hist$eFGa <- ave(NCAA_Hist$eFG, NCAA_Hist$Season)
+NCAA_Hist$USGa <- ave(NCAA_Hist$USG, NCAA_Hist$Season)
+NCAA_Hist$ORTGa <- ave(NCAA_Hist$ORtg, NCAA_Hist$Season)
+NCAA_Hist$DRTGa <- ave(NCAA_Hist$DRtg, NCAA_Hist$Season)
+NCAA_Hist$PPSa <- ave(NCAA_Hist$PPS, NCAA_Hist$Season)
+NCAA_Hist$PERa <- ave(NCAA_Hist$PER, NCAA_Hist$Season)
+NCAA_Hist$ORBpa <- ave(NCAA_Hist$ORBp, NCAA_Hist$Season)
+NCAA_Hist$DRBpa <- ave(NCAA_Hist$DRBp, NCAA_Hist$Season)
+NCAA_Hist$ASTpa <- ave(NCAA_Hist$ASTp, NCAA_Hist$Season)
+NCAA_Hist$TOVpa <- ave(NCAA_Hist$TOVp, NCAA_Hist$Season)
+NCAA_Hist$STLpa <- ave(NCAA_Hist$STLp, NCAA_Hist$Season)
+NCAA_Hist$BLKpa <- ave(NCAA_Hist$BLKp, NCAA_Hist$Season)
+
+#save per minute stats in new table
+NCAA_Histpm <- NCAA_Hist
+
+#Calculate above/below average for historical data
+NCAA_Hist <- transform(NCAA_Hist, FGM = FGM- FGMa)
+NCAA_Hist <- transform(NCAA_Hist, FGA = FGA- FGAa)
+NCAA_Hist <- transform(NCAA_Hist, X3PM = X3PM - X3PMa)
+NCAA_Hist <- transform(NCAA_Hist, X3PA = X3PA - X3PAa)
+NCAA_Hist <- transform(NCAA_Hist, FTM = FTM - FTMa)
+NCAA_Hist <- transform(NCAA_Hist, FTA = FTA - FTAa)
+NCAA_Hist <- transform(NCAA_Hist, TOV = TOV - TOVa)
+NCAA_Hist <- transform(NCAA_Hist, ORB = ORB - ORBa)
+NCAA_Hist <- transform(NCAA_Hist, DRB = DRB - DRBa)
+NCAA_Hist <- transform(NCAA_Hist, AST = AST - ASTa)
+NCAA_Hist <- transform(NCAA_Hist, STL = STL - STLa)
+NCAA_Hist <- transform(NCAA_Hist, BLK = BLK - BLKa)
+NCAA_Hist <- transform(NCAA_Hist, PTS = PTS - PTSa)
+
+#Make 0's Null for FTA and 3PA for 2019 data
+NCAA_2019$FTA <- ifelse(NCAA_2019$FTA ==0,NA, NCAA_2019$FTA)
+NCAA_2019$'3PA' <- ifelse(NCAA_2019$'3PA' ==0,NA, NCAA_2019$'3PA')
+
+#rename 3PM and 3PA columns
+colnames(NCAA_2019)[12] <- c("X3PM")
+colnames(NCAA_2019)[13] <- c("X3PA")
+
+#Calculate per minute numbers for 2019 data
+NCAA_2019 <- transform(NCAA_2019, FGM = FGM /MIN)
+NCAA_2019 <- transform(NCAA_2019, FGA = FGA /MIN)
+NCAA_2019 <- transform(NCAA_2019, X3PM = X3PM /MIN)
+NCAA_2019 <- transform(NCAA_2019, X3PA = X3PA /MIN)
+NCAA_2019 <- transform(NCAA_2019, X3Pp = X3PM /X3PA)
+NCAA_2019 <- transform(NCAA_2019, FTM = FTM /MIN)
+NCAA_2019 <- transform(NCAA_2019, FTA = FTA /MIN)
+NCAA_2019 <- transform(NCAA_2019, FTp = FTM /FTA)
+NCAA_2019 <- transform(NCAA_2019, TOV = TOV /MIN)
+NCAA_2019 <- transform(NCAA_2019, ORB = ORB /MIN)
+NCAA_2019 <- transform(NCAA_2019, DRB = DRB /MIN)
+NCAA_2019 <- transform(NCAA_2019, AST = AST /MIN)
+NCAA_2019 <- transform(NCAA_2019, STL = STL /MIN)
+NCAA_2019 <- transform(NCAA_2019, BLK = BLK /MIN)
+NCAA_2019 <- transform(NCAA_2019, PTS = PTS /MIN)
+NCAA_2019 <- transform(NCAA_2019, MIN = MIN/GP)
+
+#Calculate averages for 2019 data
+NCAA_2019$X3Ppa <- ave(NCAA_2019$X3Pp, NCAA_2019$Season, FUN=function(x) mean(x, na.rm=T))
+NCAA_2019$FTpa <- ave(NCAA_2019$FTp, NCAA_2019$Season, FUN=function(x) mean(x, na.rm=T))
+NCAA_2019$FGMa <- ave(NCAA_2019$FGM, NCAA_2019$Season)
+NCAA_2019$FGAa <- ave(NCAA_2019$FGA, NCAA_2019$Season)
+NCAA_2019$X3PMa <- ave(NCAA_2019$X3PM, NCAA_2019$Season)
+NCAA_2019$X3PAa <- ave(NCAA_2019$X3PA, NCAA_2019$Season, FUN=function(x) mean(x, na.rm=T))
+NCAA_2019$FTMa <- ave(NCAA_2019$FTM, NCAA_2019$Season)
+NCAA_2019$FTAa <- ave(NCAA_2019$FTA, NCAA_2019$Season, FUN=function(x) mean(x, na.rm=T))
+NCAA_2019$TOVa <- ave(NCAA_2019$TOV, NCAA_2019$Season)
+NCAA_2019$ORBa <- ave(NCAA_2019$ORB, NCAA_2019$Season)
+NCAA_2019$DRBa <- ave(NCAA_2019$DRB, NCAA_2019$Season)
+NCAA_2019$ASTa <- ave(NCAA_2019$AST, NCAA_2019$Season)
+NCAA_2019$STLa <- ave(NCAA_2019$STL, NCAA_2019$Season)
+NCAA_2019$BLKa <- ave(NCAA_2019$BLK, NCAA_2019$Season)
+NCAA_2019$PTSa <- ave(NCAA_2019$PTS, NCAA_2019$Season)
+NCAA_2019$TSa <- ave(NCAA_2019$TS., NCAA_2019$Season)
+NCAA_2019$eFGa <- ave(NCAA_2019$eFG., NCAA_2019$Season)
+NCAA_2019$USGa <- ave(NCAA_2019$USG., NCAA_2019$Season)
+NCAA_2019$ORTGa <- ave(NCAA_2019$ORtg, NCAA_2019$Season)
+NCAA_2019$DRTGa <- ave(NCAA_2019$DRtg, NCAA_2019$Season)
+NCAA_2019$PPSa <- ave(NCAA_2019$PPS, NCAA_2019$Season)
+NCAA_2019$PERa <- ave(NCAA_2019$PER, NCAA_2019$Season)
+NCAA_2019$ORBpa <- ave(NCAA_2019$ORB., NCAA_2019$Season)
+NCAA_2019$DRBpa <- ave(NCAA_2019$DRB., NCAA_2019$Season)
+NCAA_2019$ASTpa <- ave(NCAA_2019$AST., NCAA_2019$Season)
+NCAA_2019$TOVpa <- ave(NCAA_2019$TOV., NCAA_2019$Season)
+NCAA_2019$STLpa <- ave(NCAA_2019$STL., NCAA_2019$Season)
+NCAA_2019$BLKpa <- ave(NCAA_2019$BLK., NCAA_2019$Season)
+
+#save per minute stats in new table
+NCAA_2019pm <- NCAA_2019
+
+#Calculate above/below average for 2019 data
+NCAA_2019 <- transform(NCAA_2019, FGM = FGM- FGMa)
+NCAA_2019 <- transform(NCAA_2019, FGA = FGA- FGAa)
+NCAA_2019 <- transform(NCAA_2019, X3PM = X3PM - X3PMa)
+NCAA_2019 <- transform(NCAA_2019, X3PA = X3PA - X3PAa)
+NCAA_2019 <- transform(NCAA_2019, FTM = FTM - FTMa)
+NCAA_2019 <- transform(NCAA_2019, FTA = FTA - FTAa)
+NCAA_2019 <- transform(NCAA_2019, TOV = TOV - TOVa)
+NCAA_2019 <- transform(NCAA_2019, ORB = ORB - ORBa)
+NCAA_2019 <- transform(NCAA_2019, DRB = DRB - DRBa)
+NCAA_2019 <- transform(NCAA_2019, AST = AST - ASTa)
+NCAA_2019 <- transform(NCAA_2019, STL = STL - STLa)
+NCAA_2019 <- transform(NCAA_2019, BLK = BLK - BLKa)
+NCAA_2019 <- transform(NCAA_2019, PTS = PTS - PTSa)
+
+#Concatenate Player and NBA Pick/YOS for historical Data
+NCAA_Hist$Player <- paste(NCAA_Hist$Player, NCAA_Hist$Season, NCAA_Hist$School, NCAA_Hist$Pick, NCAA_Hist$YOS, sep = "_")
+
+paste(NCAA_Hist$Player, NCAA_Hist$Season, NCAA_Hist$School,"(Draft:", NCAA_Hist$Pick, "YOS:", NCAA_Hist$YOS, ")", sep= " ")
+
+NCAA_Hist <- NCAA_Hist %>%
+  mutate_if(is.numeric, funs(ifelse(is.na(.), 0, .)))
+
+NCAA_2019 <- NCAA_2019 %>%
+  mutate_if(is.numeric, funs(ifelse(is.na(.), 0, .)))
+
+#Convert Class to Numbers
+NCAA_2019$Class = factor(NCAA_2019$Class,
+                       levels = c('Fr', 'So', 'Jr', 'Sr'),
+                       labels = c(1, 2, 3, 4))
+
+NCAA_Hist$Class = factor(NCAA_Hist$Class,
+                       levels = c('Fr', 'So', 'Jr', 'Sr'),
+                       labels = c(1, 2, 3, 4))
+
+NCAA_2019 <- na.omit(NCAA_2019)
+NCAA_Hist <- na.omit(NCAA_Hist)
+
+#Convert to Numeric
+NCAA_2019$Class <- as.numeric(NCAA_2019$Class)
+NCAA_Hist$Class <- as.numeric(NCAA_Hist$Class)
+
+#Normalize data
+normalize <- function(x) {
+return ((x - min(x)) / (max(x) - min(x))) }
+
+NCAA_Hist[,c(3,4,6,9:22)] <- as.data.frame(lapply(NCAA_Hist[,c(3,4,6,9:22)], normalize))
+NCAA_2019[,c(3,4,6,9:22)] <- as.data.frame(lapply(NCAA_2019[,c(3,4,6,9:22)], normalize))
+
+#create new table for use below
+sim_2019 <- NCAA_2019
+sim_hist <- NCAA_Hist
+
+#Make Players row names
+row.names(sim_hist) <- sim_hist$Player
+row.names(sim_2019) <- sim_2019$Player
+row.names(NCAA_2019pm) <- NCAA_2019pm$Player
+
+#Select columns I want for similarity comparisons (sim_hist & sim_2019) and columns I want displayed in final output (NCAA_2019pm & NCAA_Histpm)
+sim_hist <- (sim_hist %>% select(Player, Season, School, Pos, Class, HT, WT, MIN, FGM, FGA, X3PM, X3PA, FTM, FTA, TOV, ORB, DRB, AST, STL, BLK, PTS))
+
+sim_2019 <- (sim_2019 %>% select(Player, Season, School, Pos, Class, HT, WT, MIN, FGM, FGA, X3PM, X3PA, FTM, FTA, TOV, ORB, DRB, AST, STL, BLK, PTS))
+
+NCAA_2019pm <- (NCAA_2019pm %>% select(Player, Season, School, Pos, Class, Height, WT, MIN, FGM, FGA, X3PM, X3PA, X3Pp, FTM, FTA, FTp, TOV, ORB, DRB, AST, STL, BLK, PTS, FGMa, FGAa, X3PMa, X3PAa, X3Ppa, FTMa, FTAa, FTpa, TOVa, ORBa, DRBa, ASTa, STLa, BLKa, PTSa, TS., eFG., USG., ORtg, DRtg, PPS, PER, ORB., DRB.,AST., STL., TOV., BLK., TSa, eFGa, USGa, ORTGa, DRTGa, PPSa, PERa, ORBpa, DRBpa,ASTpa, STLpa, TOVpa, BLKpa))
+
+NCAA_Histpm <- (NCAA_Histpm %>% select(Player, Season, School, Pos, Class, HT, WT, MIN, FGM, FGA, X3PM, X3PA, X3Pp, FTM, FTA, FTp, TOV, ORB, DRB, AST, STL, BLK, PTS, FGMa, FGAa, X3PMa, X3PAa, X3Ppa, FTMa, FTAa, FTpa, TOVa, ORBa, DRBa, ASTa, STLa, BLKa, PTSa, TS, eFG, USG, ORtg, DRtg, PPS, PER, ORBp, DRBp,ASTp, STLp, TOVp, BLKp, TSa, eFGa, USGa, ORTGa, DRTGa, PPSa, PERa, ORBpa, DRBpa,ASTpa, STLpa, TOVpa, BLKpa))
+
+#Calculate similarities using euclidean distance
+#Drop columns that aren't stats used in differences
+x <- sim_hist[,-c(1:4,21),drop=FALSE]
+y <- sim_2019[,-c(1:4,21),drop=FALSE]
+
+euc_dist <- as.matrix(dist2(x,y))
+
+# Get the ith player's label name for one player
+    ith_item <- function(col, euc_dist, top_i) {
+      labels(euc_dist)[[1]][top_i[col]]
+    }
+    
+  # Get the ith players score from one column
+    ith_score <- function(col, euc_dist, top_i) {
+      euc_dist[top_i[col], col]
+    }
+
+    # Create a dataframe with the ith most similar item for all items
+    ith_similar <- function(euc_dist, i) {
+      orders <- apply(euc_dist, 2, order)
+      top_i <- orders[i + 1, ]
+
+      top_i_score <- sapply(1:ncol(euc_dist), ith_score, euc_dist, top_i)
+      top_i_items <- sapply(1:ncol(euc_dist), ith_item, euc_dist, top_i)
+
+      similarities <- data.frame(placeholder1 = top_i_score,
+                                 placeholder2 = top_i_items)
+
+      colnames <- c(paste0("similar_", i, "_score"), paste0("similar_", i))
+      names(similarities) <- colnames
+
+      similarities
+    }
+
+    #top 10 similarities
+      similarity1 <- ith_similar(euc_dist, 1)
+      similarity2 <- ith_similar(euc_dist, 2)
+      similarity3 <- ith_similar(euc_dist, 3)
+      similarity4 <- ith_similar(euc_dist, 4)
+      similarity5 <- ith_similar(euc_dist, 5)
+      similarity6 <- ith_similar(euc_dist, 6)
+      similarity7 <- ith_similar(euc_dist, 7)
+      similarity8 <- ith_similar(euc_dist, 8)
+      similarity9 <- ith_similar(euc_dist, 9)
+      similarity10 <- ith_similar(euc_dist, 10)
+      
+      tmp_similarities <- sqldf("select * from similarity1 join similarity2 ON similarity1.rowid = similarity2.rowid join similarity3 ON similarity1.rowid = similarity3.rowid
+                                join similarity4 ON similarity1.rowid = similarity4.rowid
+                                join similarity5 ON similarity1.rowid = similarity5.rowid
+                                join similarity6 ON similarity1.rowid = similarity6.rowid
+                                join similarity7 ON similarity1.rowid = similarity7.rowid
+                                join similarity8 ON similarity1.rowid = similarity8.rowid
+                                join similarity9 ON similarity1.rowid = similarity9.rowid
+                                join similarity10 ON similarity1.rowid = similarity10.rowid")
+    
+
+      #Combine results to per minute player data
+      data <- cbind(NCAA_2019pm, tmp_similarities)
+      
+      #Remove Similar Scores
+      data <- data[-c(65,67,69,71,73,75,77,79,81,83)]
+      
+      #Make similar players one column
+      data <- cbind(data[c(1:64)], stack(lapply(data[65:74], as.character)))
+      
+#Reshape to make measures long
+data <- reshape(data, direction='long', 
+        varying=c("FGM","FGA", "X3PM", "X3PA", "X3Pp", "FTM", "FTA", "FTp", "TOV", "ORB", "DRB", "AST", "STL", "BLK", "PTS", "TS.", "eFG.", "USG.", "ORtg", "DRtg", "PPS", "PER", "ORB.", "DRB.", "AST.", "STL.", "TOV.", "BLK."), 
+        timevar='Measure',
+        times=c("FGM","FGA", "X3PM", "X3PA", "X3Pp", "FTM", "FTA", "FTp", "TOV", "ORB", "DRB", "AST", "STL", "BLK", "PTS", "TS.", "eFG.", "USG.", "ORtg", "DRtg", "PPS", "PER", "ORB.", "DRB.", "AST.", "STL.", "TOV.", "BLK."),
+        v.names=c('Value'),
+        idvar='Player.1')
+
+
+#Create Historical dataset to union to 2019 data
+NCAA_hist_stats <- sqldf("select Player, Season, School, Pos, Class, '6-1' AS Height, WT, MIN, FGM, FGA, X3PM, X3PA, X3Pp, FTM, FTA, FTp, TOV, ORB, DRB, AST, STL, BLK, PTS,  FGMa, FGAa,  X3PMa,  X3PAa, X3Ppa,  FTMa,  FTAa, FTpa,  TOVa,  ORBa,  DRBa,  ASTa,  STLa,  BLKa,  PTSa, TSa, eFGa, USGa, ORTGa, DRTGa, PPSa, PERa, ORBpa, DRBpa, ASTpa, STLpa, TOVpa, BLKpa, TS AS [TS.], eFG AS [eFG.], USG AS [USG.], ORtg, DRtg, PPS, PER, ORBp AS [ORB.], DRBp AS [DRB.], ASTp AS [AST.], STLp AS [STL.], TOVp AS [TOV.], BLKp AS [BLK.], 'None' AS 'Values', 'None' AS 'ind' from NCAA_Histpm")
+
+
+#Reshape to make measures long
+datahist <- reshape(NCAA_hist_stats, direction='long', 
+        varying=c("FGM","FGA", "X3PM", "X3PA", "X3Pp", "FTM", "FTA", "FTp", "TOV", "ORB", "DRB", "AST", "STL", "BLK", "PTS", "TS.", "eFG.", "USG.", "ORtg", "DRtg", "PPS", "PER", "ORB.", "DRB.", "AST.", "STL.", "TOV.", "BLK."), 
+        timevar='Measure',
+        times=c("FGM","FGA", "X3PM", "X3PA", "X3Pp", "FTM", "FTA", "FTp", "TOV", "ORB", "DRB", "AST", "STL", "BLK", "PTS", "TS.", "eFG.", "USG.", "ORtg", "DRtg", "PPS", "PER", "ORB.", "DRB.", "AST.", "STL.", "TOV.", "BLK."),
+        v.names=c('Value'),
+        idvar='Player.1')
+
+#Create Output dataframe
+NCAA_Hist_2019 <- sqldf("select * from data union select * from datahist")
+
+#export results to insert into tableau
+#write_excel_csv(NCAA_Hist_2019, "NCAA_Hist_2019.csv")
+
+
+```
+
+
